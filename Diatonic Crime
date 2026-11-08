@@ -1,0 +1,96 @@
+desc:Lights; low - Diatonic Crime
+tags:MIDI chord harmonizer scale diatonic
+author:Carl Kashnier
+// License: free noncommercial use. Commercial use requires either credit to
+// Carl Kashnier or a one-time $5 USD license. See the repository LICENSE.
+
+// Place before a virtual instrument. Each incoming note triggers up to four
+// notes chosen by scale degree. Degree 9 is treated as degree 2 one octave up.
+
+slider1:2<0,11,1{C,C#,D,D#,E,F,F#,G,G#,A,A#,B}>Tonic
+slider2:1<0,7,1{Major,Natural Minor,Dorian,Mixolydian,Phrygian,Lydian,Locrian,Chromatic}>Scale
+slider3:1<0,1,1{Off,On}>Degree 1 (Root)
+slider4:0<0,1,1{Off,On}>Degree 2
+slider5:1<0,1,1{Off,On}>Degree 3
+slider6:1<0,1,1{Off,On}>Degree 5
+slider7:1<0,1,1{Off,On}>Degree 7
+slider8:0<0,1,1{Off,On}>Degree 9
+slider9:0<-2,2,1>Output octave
+slider10:0<-24,24,1>Transpose semitones
+slider11:0<0,2,1{Pass non-note MIDI,Pass all input notes too,Generated notes only}>MIDI pass mode
+slider12:1<0,2,1{Allow,Round down,Block}>Roots outside scale
+
+in_pin:none
+out_pin:none
+
+@init
+// Active-note bookkeeping: [channel * 128 + input note] * 5 stores count
+// followed by the four generated MIDI notes.
+memset(0, -1, 16 * 128 * 5);
+
+function scale_len(sc) (
+  sc == 7 ? 12 : 7;
+);
+
+function scale_semitone(sc, degree_index) local(oct, idx, val) (
+  sc == 7 ? degree_index : (
+    oct = floor(degree_index / 7);
+    idx = degree_index % 7;
+    sc == 0 ? (
+      idx == 0 ? val=0 : idx == 1 ? val=2 : idx == 2 ? val=4 :
+      idx == 3 ? val=5 : idx == 4 ? val=7 : idx == 5 ? val=9 : val=11;
+    ) : sc == 1 ? (
+      idx == 0 ? val=0 : idx == 1 ? val=2 : idx == 2 ? val=3 :
+      idx == 3 ? val=5 : idx == 4 ? val=7 : idx == 5 ? val=8 : val=10;
+    ) : sc == 2 ? (
+      idx == 0 ? val=0 : idx == 1 ? val=2 : idx == 2 ? val=3 :
+      idx == 3 ? val=5 : idx == 4 ? val=7 : idx == 5 ? val=9 : val=10;
+    ) : sc == 3 ? (
+      idx == 0 ? val=0 : idx == 1 ? val=2 : idx == 2 ? val=4 :
+      idx == 3 ? val=5 : idx == 4 ? val=7 : idx == 5 ? val=9 : val=10;
+    ) : sc == 4 ? (
+      idx == 0 ? val=0 : idx == 1 ? val=1 : idx == 2 ? val=3 :
+      idx == 3 ? val=5 : idx == 4 ? val=7 : idx == 5 ? val=8 : val=10;
+    ) : sc == 5 ? (
+      idx == 0 ? val=0 : idx == 1 ? val=2 : idx == 2 ? val=4 :
+      idx == 3 ? val=6 : idx == 4 ? val=7 : idx == 5 ? val=9 : val=11;
+    ) : (
+      idx == 0 ? val=0 : idx == 1 ? val=1 : idx == 2 ? val=3 :
+      idx == 3 ? val=5 : idx == 4 ? val=6 : idx == 5 ? val=8 : val=10;
+    );
+    val + oct * 12;
+  );
+);
+
+// Find the pressed note's position in the chosen global scale. If it is
+// outside the scale, use the pressed note as a temporary chromatic root while
+// retaining the selected scale's interval pattern.
+function find_degree(note, tonic, sc) local(pc, i, found) (
+  sc == 7 ? (note - tonic) : (
+    pc = (note - tonic) % 12;
+    pc < 0 ? pc += 12;
+    found = -1;
+    i = 0;
+    loop(7,
+      scale_semitone(sc, i) == pc ? found = i;
+      i += 1;
+    );
+    found;
+  );
+);
+
+function round_note_down(note, tonic, sc) local(candidate, degree, tries) (
+  sc == 7 ? note : (
+    candidate = note;
+    degree = find_degree(candidate, tonic, sc);
+    tries = 0;
+    while(degree < 0 && tries < 12) (
+      candidate -= 1;
+      degree = find_degree(candidate, tonic, sc);
+      tries += 1;
+    );
+    candidate;
+  );
+);
+
+function degree_to_offset(choice, root_degree, sc, chromatic_root) local(di) (
